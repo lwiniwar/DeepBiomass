@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import re
+import os
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -70,12 +71,12 @@ class PointCloudsInFiles(InMemoryDataset):
 
         xpos, ypos = np.unravel_index(self.valid_1d_indices[idx], (self.YSize, self.XSize))
         y_label = self.biomass[xpos, ypos]
-        bbox = [self.ulx + ypos * self.xres,
-                self.uly + xpos * self.yres,
-                self.ulx + (ypos+1) * self.xres,
-                self.uly + (xpos+1) * self.yres]
+        bbox = [self.ulx + (ypos+0.0) * self.xres,
+                self.uly + (xpos+0.0) * self.yres,
+                self.ulx + (ypos+1.0) * self.xres,
+                self.uly + (xpos+1.0) * self.yres]
 
-
+        # print(bbox, y_label)
         q_polygon = Polygon([(bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[2], bbox[3]), (bbox[0], bbox[3])])
 
         pcloud = {'xyz': []}
@@ -124,15 +125,21 @@ class PointCloudsInFiles(InMemoryDataset):
 
 def main(args):
     train_dataset = PointCloudsInFiles(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\PRF_LiDAR2012_RF_Surfaces\Predicted Surfaces\RF_PRF_biomass_Ton_DRY_masked.tif",
+                               biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif",
                                )
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True,
+                              num_workers=6)
+
+    test_dataset = PointCloudsInFiles(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+                               biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif",
+                               )
+    test_loader = DataLoader(train_dataset, batch_size=2, shuffle=True,
                               num_workers=6)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using {device} device.")
     model = Net(num_features=0).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
 
 
     def train():
@@ -166,18 +173,18 @@ def main(args):
 
 
     for epoch in range(1, 1001):
-        # model_path = rf'C:\Users\Lukas\Documents\Data\dl_samples\normalized_height\latest_height_x2.model'
-        # if os.path.exists(model_path):
-        #     model = torch.load(model_path)
+        model_path = rf'D:\lwiniwar\data\uncertaintree\DeepBiomass\models\deepbiomass.model'
+        if os.path.exists(model_path):
+            model = torch.load(model_path)
         train_mse = train()
 
-        # mse = test(test_loader, epoch)
-        # torch.save(model, model_path)
-        # with open(model_path.replace('.model', '.csv'), 'a') as f:
-        #     f.write(
-        #     f'{epoch}, {train_mse}, {mse}\n'
-        #     )
-        # print(f'Epoch: {epoch:02d}, Mean test MSE: {mse:.4f}')
+        mse = test(test_loader, epoch)
+        torch.save(model, model_path)
+        with open(model_path.replace('.model', '.csv'), 'a') as f:
+            f.write(
+            f'{epoch}, {train_mse}, {mse}\n'
+            )
+        print(f'Epoch: {epoch:02d}, Mean test MSE: {mse:.4f}')
         print(f'Epoch: {epoch:02d}, Mean train MSE: {train_mse:.4f}')
 
 
