@@ -21,6 +21,7 @@ from laxpy.file import LAXParser
 
 
 from pn2_scalar_regressor import Net
+import rasterizer
 
 class PointCloudsInFiles(InMemoryDataset):
     """Point cloud dataset where one data point is a file."""
@@ -76,7 +77,7 @@ class PointCloudsInFiles(InMemoryDataset):
                 self.ulx + (ypos+1.0) * self.xres,
                 self.uly + (xpos+1.0) * self.yres]
 
-        # print(bbox, y_label)
+        print(bbox, y_label)
         q_polygon = Polygon([(bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[2], bbox[3]), (bbox[0], bbox[3])])
 
         pcloud = {'xyz': []}
@@ -122,18 +123,103 @@ class PointCloudsInFiles(InMemoryDataset):
 
         return sample
 
+class PointCloudsRasterExtract(InMemoryDataset):
+    """Point cloud dataset where one data point is a file."""
+
+    def __init__(self, lasfiles, biomassfile, max_points=20000, backup_extract=None):
+        self.lasfiles = lasfiles
+        self.biomassfile = biomassfile
+        self.max_points = max_points
+
+        ds = gdal.Open(self.biomassfile)
+        ulx, xres, xskew, uly, yskew, yres = ds.GetGeoTransform()
+        lrx = ulx + (ds.RasterXSize * xres)
+        lry = uly + (ds.RasterYSize * yres)
+
+        self.XSize = ds.RasterXSize
+        self.YSize = ds.RasterYSize
+        self.ulx = ulx
+        self.uly = uly
+        self.xres = xres
+        self.yres = yres
+
+        band = ds.GetRasterBand(1)
+        nodata = band.GetNoDataValue()
+        arr = band.ReadAsArray()
+        arr[arr == nodata] = np.nan
+        self.biomass = arr
+
+
+
+        self.bboxes = []
+        self.lasindices = np.full_like(self.biomass, None, dtype=object)
+
+        if backup_extract is not None and os.path.exists(backup_extract):
+            print("Loading previously extracted point indices from disk...")
+            self.lasindices = np.load(backup_extract, allow_pickle=True)
+
+        else:
+            for fileid, lasfile in enumerate(tqdm.tqdm(self.lasfiles, "scanning input las files")):
+                lashandle = laspy.read(lasfile)
+                xy = lashandle.xyz[:, :2]
+                raster = rasterizer.Rasterizer(data=xy, raster_size=(xres, yres), method=None)
+                XVoxelCenter, XVoxelContains, idxVoxelUnique, _ = raster.rasterize(origin=(ulx, uly))
+
+                for cid, (centerx, centery, contains) in enumerate(zip(*XVoxelCenter, XVoxelContains)):
+                    # get respective biomass
+                    px = int((centerx - ulx)/xres)
+                    py = int((centery - uly)/yres)
+                    if px < 0 or px >= self.XSize or py < 0 or py >= self.YSize:
+                        continue
+                    bm = arr[py, px]
+                    if not np.isnan(bm):
+                        if self.lasindices[py, px] is None:
+                            self.lasindices[py, px] = {fileid: contains}
+                        else:
+                            self.lasindices[py, px][fileid] = contains
+            if backup_extract is not None:
+                self.lasindices.dump(backup_extract)
+
+        self.valid_1d_indices = np.where(np.logical_and(np.isfinite(arr.flatten()), self.lasindices.flatten()))[0]
+
+        super().__init__()
+
+    def __len__(self):
+        return len(self.valid_1d_indices)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        xpos, ypos = np.unravel_index(self.valid_1d_indices[idx], (self.YSize, self.XSize))
+        y_label = self.biomass[xpos, ypos]
+        lasindices = self.lasindices[xpos, ypos]
+
+        xyz = []
+        for fileid, contains in lasindices.items():
+            lashandle = laspy.read(self.lasfiles[fileid])
+            xyz.append(lashandle.xyz[contains])
+        xyz = np.concatenate(xyz)
+        sample = Data(pos=torch.from_numpy(xyz).float(),
+                      y=torch.as_tensor(y_label, dtype=torch.float))
+
+        return sample
+
+
 
 def main(args):
-    train_dataset = PointCloudsInFiles(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+    train_dataset = PointCloudsRasterExtract(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
                                biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif",
+                                             backup_extract=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.npy"
                                )
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True,
                               num_workers=6)
 
-    test_dataset = PointCloudsInFiles(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+    test_dataset = PointCloudsRasterExtract(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
                                biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif",
+                                             backup_extract=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\test_presel.npy"
                                )
-    test_loader = DataLoader(train_dataset, batch_size=2, shuffle=True,
+    test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False,
                               num_workers=6)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
