@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import tqdm
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import InMemoryDataset, Data
-
+from torch.utils.data import Sampler
 
 from shapely.geometry import Polygon
 from osgeo import gdal, gdal_array
@@ -126,10 +126,11 @@ class PointCloudsInFiles(InMemoryDataset):
 class PointCloudsRasterExtract(InMemoryDataset):
     """Point cloud dataset where one data point is a file."""
 
-    def __init__(self, lasfiles, biomassfile, max_points=20000, backup_extract=None):
+    def __init__(self, lasfiles, biomassfile, max_points=20000, backup_extract=None, skip_n=0):
         self.lasfiles = lasfiles
         self.biomassfile = biomassfile
         self.max_points = max_points
+        self.skip_n = skip_n
 
         ds = gdal.Open(self.biomassfile)
         ulx, xres, xskew, uly, yskew, yres = ds.GetGeoTransform()
@@ -154,7 +155,7 @@ class PointCloudsRasterExtract(InMemoryDataset):
         self.bboxes = []
         self.lasindices = np.full_like(self.biomass, None, dtype=object)
 
-        if backup_extract is not None and os.path.exists(backup_extract):
+        if backup_extract is not None and os.path.exists(backup_extract) and False:
             print("Loading previously extracted point indices from disk...")
             self.lasindices = np.load(backup_extract, allow_pickle=True)
 
@@ -162,9 +163,14 @@ class PointCloudsRasterExtract(InMemoryDataset):
             for fileid, lasfile in enumerate(tqdm.tqdm(self.lasfiles, "scanning input las files")):
                 lashandle = laspy.read(lasfile)
                 xy = lashandle.xyz[:, :2]
+                minxy = np.min(xy, axis=0)
+                maxxy = np.max(xy, axis=0)
+                if maxxy[0] < ulx or minxy[0] > lrx:
+                    continue
+                if maxxy[1] < lry or minxy[1] > uly:
+                    continue
                 raster = rasterizer.Rasterizer(data=xy, raster_size=(xres, yres), method=None)
                 XVoxelCenter, XVoxelContains, idxVoxelUnique, _ = raster.rasterize(origin=(ulx, uly))
-
                 for cid, (centerx, centery, contains) in enumerate(zip(*XVoxelCenter, XVoxelContains)):
                     # get respective biomass
                     px = int((centerx - ulx)/xres)
@@ -181,15 +187,16 @@ class PointCloudsRasterExtract(InMemoryDataset):
                 self.lasindices.dump(backup_extract)
 
         self.valid_1d_indices = np.where(np.logical_and(np.isfinite(arr.flatten()), self.lasindices.flatten()))[0]
-
+        print(f"{len(self)} training samples found.")
         super().__init__()
 
     def __len__(self):
-        return len(self.valid_1d_indices)
+        return len(self.valid_1d_indices) - self.skip_n
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
+        idx += self.skip_n
 
         xpos, ypos = np.unravel_index(self.valid_1d_indices[idx], (self.YSize, self.XSize))
         y_label = self.biomass[xpos, ypos]
@@ -208,16 +215,17 @@ class PointCloudsRasterExtract(InMemoryDataset):
 
 
 def main(args):
-    train_dataset = PointCloudsRasterExtract(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif",
-                                             backup_extract=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.npy"
+    train_dataset = PointCloudsRasterExtract(lasfiles=list(Path(r"D:\temp\harm_2012_norm").glob("*.laz")),
+                               biomassfile=r"D:\temp\RF_PRF_biomass_Ton_DRY_masked_train.tif",
+                                             backup_extract=r"D:\temp\train_presel.npy",
+                                             skip_n=0,
                                )
-    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True,
+    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=False,
                               num_workers=6)
 
-    test_dataset = PointCloudsRasterExtract(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif",
-                                             backup_extract=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\test_presel.npy"
+    test_dataset = PointCloudsRasterExtract(lasfiles=list(Path(r"D:\temp\harm_2012_norm").glob("*.laz")),
+                               biomassfile=r"D:\temp\RF_PRF_biomass_Ton_DRY_masked_test.tif",
+                                             backup_extract=r"D:\temp\test_presel.npy"
                                )
     test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False,
                               num_workers=6)
@@ -228,7 +236,7 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
 
 
-    def train():
+    def train(path):
         model.train()
         loss_list = []
         for i, data in enumerate(train_loader):
@@ -241,6 +249,10 @@ def main(args):
             if (i + 1) % 1 == 0:
                 print(f'[{i + 1}/{len(train_loader)}] MSE Loss: {loss.to("cpu"):.4f} ')
                 loss_list.append(loss.detach().to("cpu").numpy())
+            if (i + 1) % 1000 == 0:
+                print(f'Saving file...')
+                torch.save(model, path)
+                print(f'mean loss last 1000 it: {np.mean(loss_list[-1000:])}')
         print(f'mean loss this epoch: {np.mean(loss_list)}')
         return np.mean(loss_list)
 
@@ -250,7 +262,7 @@ def main(args):
         losses = []
         for idx, data in enumerate(loader):
             data = data.to(device)
-            outs = model(data)
+            outs = model(data)[:, 0]
             loss = F.mse_loss(outs, data.y)
             print("Sample differences in p95:")
             print(data.y.to('cpu').numpy() - outs.to('cpu').numpy())
@@ -259,13 +271,13 @@ def main(args):
 
 
     for epoch in range(1, 1001):
-        model_path = rf'D:\lwiniwar\data\uncertaintree\DeepBiomass\models\deepbiomass.model'
+        model_path = rf'D:\temp\models\deepbiomass.model'
         if os.path.exists(model_path):
             model = torch.load(model_path)
-        train_mse = train()
+        train_mse = train(model_path)
+        torch.save(model, model_path)
 
         mse = test(test_loader, epoch)
-        torch.save(model, model_path)
         with open(model_path.replace('.model', '.csv'), 'a') as f:
             f.write(
             f'{epoch}, {train_mse}, {mse}\n'
