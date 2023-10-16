@@ -22,7 +22,6 @@ from laxpy.file import LAXParser
 
 from pn2_scalar_regressor import Net
 import rasterizer
-from HDF5loader import HDF5BiomassPointCloud
 
 class PointCloudsInFiles(InMemoryDataset):
     """Point cloud dataset where one data point is a file."""
@@ -124,11 +123,12 @@ class PointCloudsInFiles(InMemoryDataset):
 
         return sample
 
-class PointCloudsRasterExtract(InMemoryDataset):
+class PointCloudsRasterExtract2Ep(InMemoryDataset):
     """Point cloud dataset where one data point is a file."""
 
-    def __init__(self, lasfiles, biomassfile, max_points=20000, backup_extract=None, skip_n=0):
-        self.lasfiles = lasfiles
+    def __init__(self, lasfiles_ep1, lasfiles_ep2, biomassfile, max_points=20000, backup_extract=None, skip_n=0):
+        self.lasfiles_ep1 = lasfiles_ep1
+        self.lasfiles_ep2 = lasfiles_ep2
         self.biomassfile = biomassfile
         self.max_points = max_points
         self.skip_n = skip_n
@@ -161,48 +161,30 @@ class PointCloudsRasterExtract(InMemoryDataset):
             self.lasindices = np.load(backup_extract, allow_pickle=True)
 
         else:
-            xyzlist = []
-            for fileid, lasfile in enumerate(tqdm.tqdm(self.lasfiles, "scanning input las files")):
+            for fileid, lasfile in enumerate(tqdm.tqdm(self.lasfiles_ep1, "scanning input las files")):
                 lashandle = laspy.read(lasfile)
-                xyzlist.append(lashandle.xyz)
-            print("Loading completed")
-            xyzlist = np.concatenate(xyzlist, axis=0)
-            print("Concatenation completed")
-            raster = rasterizer.Rasterizer(data=xyzlist[:, :2], raster_size=(xres, yres), method=None)
-            XVoxelCenter, XVoxelContains, idxVoxelUnique, _ = raster.rasterize(origin=(ulx, uly))
-            print("Rasterization completed")
-            for cid, (centerx, centery, contains) in enumerate(zip(*XVoxelCenter, XVoxelContains)):
-            # get respective biomass
-                px = int((centerx - ulx)/xres)
-                py = int((centery - uly)/yres)
-                if px < 0 or px >= self.XSize or py < 0 or py >= self.YSize:
+                xy = lashandle.xyz[:, :2]
+                minxy = np.min(xy, axis=0)
+                maxxy = np.max(xy, axis=0)
+                if maxxy[0] < ulx or minxy[0] > lrx:
                     continue
-                bm = arr[py, px]
-                if not np.isnan(bm):
-                    self.lasindices[py, px] = xyzlist[contains]
-            print("Extraction completed")
-            # xy = lashandle.xyz[:, :2]
-                # minxy = np.min(xy, axis=0)
-                # maxxy = np.max(xy, axis=0)
-                # if maxxy[0] < ulx or minxy[0] > lrx:
-                #     continue
-                # if maxxy[1] < lry or minxy[1] > uly:
-                #     continue
-                # raster = rasterizer.Rasterizer(data=xy, raster_size=(xres, yres), method=None)
-                # XVoxelCenter, XVoxelContains, idxVoxelUnique, _ = raster.rasterize(origin=(ulx, uly))
-                # for cid, (centerx, centery, contains) in enumerate(zip(*XVoxelCenter, XVoxelContains)):
-                #     # get respective biomass
-                #     px = int((centerx - ulx)/xres)
-                #     py = int((centery - uly)/yres)
-                #     if px < 0 or px >= self.XSize or py < 0 or py >= self.YSize:
-                #         continue
-                #     bm = arr[py, px]
-                #     if not np.isnan(bm):
-                #         if self.lasindices[py, px] is None:
-                #             self.lasindices[py, px] = [lashandle.xyz[contains, :]]
-                #         else:
-                #             self.lasindices[py, px].append(lashandle.xyz[contains, :])
-
+                if maxxy[1] < lry or minxy[1] > uly:
+                    continue
+                raster = rasterizer.Rasterizer(data=xy, raster_size=(xres, yres), method=None)
+                XVoxelCenter, XVoxelContains, idxVoxelUnique, _ = raster.rasterize(origin=(ulx, uly))
+                for cid, (centerx, centery, contains) in enumerate(zip(*XVoxelCenter, XVoxelContains)):
+                    # get respective biomass
+                    px = int((centerx - ulx)/xres)
+                    py = int((centery - uly)/yres)
+                    if px < 0 or px >= self.XSize or py < 0 or py >= self.YSize:
+                        continue
+                    bm = arr[py, px]
+                    if not np.isnan(bm):
+                        if self.lasindices[py, px] is None:
+                            self.lasindices[py, px] = lashandle.xyz[contains, :]
+                        else:
+                            self.lasindices[py, px] = np.concatenate([self.lasindices[py, px],
+                                                                      lashandle.xyz[contains, :]])
             if backup_extract is not None:
                 self.lasindices.dump(backup_extract)
 
@@ -222,11 +204,11 @@ class PointCloudsRasterExtract(InMemoryDataset):
         y_label = self.biomass[xpos, ypos]
         lasindices = self.lasindices[xpos, ypos]
 
-        xyz = []
-        for fileid, contains in lasindices.items():
-            lashandle = laspy.read(self.lasfiles[fileid])
-            xyz.append(lashandle.xyz[contains])
-        xyz = np.concatenate(xyz)
+        xyz = lasindices
+        # for fileid, contains in lasindices.items():
+        #     lashandle = laspy.read(self.lasfiles[fileid])
+        #     xyz.append(lashandle.xyz[contains])
+        # xyz = np.concatenate(xyz)
         sample = Data(pos=torch.from_numpy(xyz).float(),
                       y=torch.as_tensor(y_label, dtype=torch.float))
 
@@ -235,35 +217,33 @@ class PointCloudsRasterExtract(InMemoryDataset):
 
 
 def main(args):
-    train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\temp\harm_2012_norm").glob("*.laz")),
-                               biomassfile=r"D:\temp\RF_PRF_biomass_Ton_DRY_masked_train.tif",
-                                             backup_extract=r"D:\temp\train_presel.hdf",
-                                             max_points=4096*1
-                               )
+    train_dataset = PointCloudsRasterExtract2Ep(lasfiles_ep1=list(Path(r"D:\temp\harm_2012_norm").glob("*.laz")),
+                                                biomassfile=r"D:\temp\RF_PRF_biomass_Ton_DRY_masked_train.tif",
+                                                backup_extract=r"D:\temp\train_presel.npy",
+                                                skip_n=0  #14000+3000+22000,
+                                                )
+    torch.random.seed(42)
+    train_dataset.shuffle()
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=False,
                               num_workers=6)
 
-    test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\temp\harm_2012_norm").glob("*.laz")),
-                               biomassfile=r"D:\temp\RF_PRF_biomass_Ton_DRY_masked_val.tif",
-                                             backup_extract=r"D:\temp\val_presel.hdf",
-                                             max_points=4096*1
-                               )
-    test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False,
-                              num_workers=8)
+    test_dataset = PointCloudsRasterExtract2Ep(lasfiles_ep1=list(Path(r"D:\temp\harm_2012_norm").glob("*.laz")),
+                                               biomassfile=r"D:\temp\RF_PRF_biomass_Ton_DRY_masked_test.tif",
+                                               backup_extract=r"D:\temp\test_presel.npy"
+                                               )
+    test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False,
+                              num_workers=6)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using {device} device.")
     model = Net(num_features=0).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-5, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
 
 
     def train(path):
         model.train()
         loss_list = []
-        for i, data in enumerate(tqdm.tqdm(train_loader, desc="Training")):
-            if data.y.shape[-1] != train_loader.batch_size:
-                print("Skipping last batch (not a full batch")
-                continue
+        for i, data in enumerate(train_loader):
             data = data.to(device)
             optimizer.zero_grad()
             out = model(data)[:, 0]
@@ -271,37 +251,31 @@ def main(args):
             loss.backward()
             optimizer.step()
             if (i + 1) % 1 == 0:
-                l = loss.detach().to("cpu").numpy()
-                # print(f'[{i + 1}/{len(train_loader)}] RMSE Loss: {np.sqrt(l):.4f} ')
-                loss_list.append(l)
+                print(f'[{i + 1}/{len(train_loader)}] MSE Loss: {loss.to("cpu"):.4f} ')
+                loss_list.append(loss.detach().to("cpu").numpy())
             if (i + 1) % 1000 == 0:
-                print(f'mean RMSE loss last 1000 it: {np.mean(np.sqrt(loss_list[-1000:]))}')
-        print(f'mean RMSE loss this epoch: {np.sqrt(np.mean(loss_list))}')
-
-        print(f'Saving file...')
-        torch.save(model, path)
-        print(f'mean RMSE loss last 1000 it: {np.sqrt(np.mean(loss_list[-1000:]))}')
-
+                print(f'Saving file...')
+                torch.save(model, path)
+                print(f'mean loss last 1000 it: {np.mean(loss_list[-1000:])}')
+        print(f'mean loss this epoch: {np.mean(loss_list)}')
         return np.mean(loss_list)
 
     @torch.no_grad()
     def test(loader, ep_id):
         model.eval()
         losses = []
-        for idx, data in enumerate(tqdm.tqdm(loader, desc="Testing")):
+        for idx, data in enumerate(loader):
             data = data.to(device)
             outs = model(data)[:, 0]
             loss = F.mse_loss(outs, data.y)
-
-            if (idx + 1) % 1000 == 0:
-                print("Sample differences in biomass:")
-                print(data.y.to('cpu').numpy(), ' - ', outs.to('cpu').numpy(), ' = ', data.y.to('cpu').numpy() -  outs.to('cpu').numpy())
+            print("Sample differences in p95:")
+            print(data.y.to('cpu').numpy() - outs.to('cpu').numpy())
             losses.append(float(loss.to("cpu")))
         return float(np.mean(losses))
 
 
     for epoch in range(1, 1001):
-        model_path = rf'D:\temp\models\deepbiomass_lr5e-5_decay_bs8_4kpoints.model'
+        model_path = rf'D:\temp\models\deepbiomass.model'
         if os.path.exists(model_path):
             model = torch.load(model_path)
         train_mse = train(model_path)
