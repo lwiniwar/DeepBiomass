@@ -1,0 +1,42 @@
+#!/bin/bash
+sbatch <<EOT
+#!/bin/bash
+
+#SBATCH -J deepBiomass_$1_$2_$3_$4
+#SBATCH --account=p72121
+##SBATCH --partition=zen2_0256_a40x2
+##SBATCH --qos=zen2_0256_a40x2
+#SBATCH --partition=zen3_0512_a100x2
+#SBATCH --qos=zen3_0512_a100x2
+#SBATCH --gres=gpu:1
+#SBATCH --mem=128G
+#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-core=1
+#SBATCH --time=00-12:00:00
+
+module purge
+spack unload
+
+export MODULEPATH=/opt/sw/cuda-zen/spack-0.19.0/share/spack/modules/linux-almalinux8-zen:$MODULEPATH
+module load cuda/11.8.0-gcc-9.5.0-ananl33  
+which nvcc
+nvcc --version
+
+module load miniconda3/4.12.0-gcc-12.2.0-cufjjct
+eval "\$(conda shell.bash hook)"
+conda activate pytorch1
+
+python -c "import torch as tc; print(tc.cuda.is_available(), tc.cuda.get_device_name(0))"
+
+echo "Copying data to local HDD..."
+mkdir /tmp/lwiniwar
+mkdir /tmp/lwiniwar/2012_norm
+cp $DATA/PetawawaHarmonized/Harmonized/2012_ALS/3_tiled_norm/*.la? /tmp/lwiniwar/2012_norm
+cp $DATA/PetawawaHarmonized/Harmonized/2012_ALS/*.hdf5 /tmp/lwiniwar/2012_norm
+echo "Waiting for files to finish copying..."
+sleep 10
+python main.py $1 $2 $3 $4
+# echo "Cleaning up local HDD..."
+# rm -R /tmp/lwiniwar
+exit 0
+EOT

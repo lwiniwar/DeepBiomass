@@ -37,18 +37,21 @@ class Net(torch.nn.Module):
         super().__init__()
 
         # Input channels account for both `pos` and node features.
-        self.sa1_module = SAModule(0.2, 0.2, MLP([3 + num_features, 64, 64, 128], act='LeakyReLU'))
+        self.sa1_module = SAModule(0.2, 0.1, MLP([3 + num_features, 64, 64, 128], act='LeakyReLU'))
         self.sa2_module = SAModule(0.25, 0.5, MLP([128 + 3, 128, 128, 256], act='LeakyReLU'))
-        self.sa3_module = SAModule(0.25, 1, MLP([256 + 3, 256, 512, 512], act='LeakyReLU'))
-        self.sa4_module = GlobalSAModule(MLP([512 + 3, 1024, 1024, 2048], act='LeakyReLU'))
+        #self.sa3_module = SAModule(0.25, 0.5, MLP([256 + 3, 256, 512, 512], act='LeakyReLU'))
+        # self.sa4_module = GlobalSAModule(MLP([512 + 3, 1024, 1024, 2048], act='LeakyReLU'))
+        self.sa3_module = GlobalSAModule(MLP([256 + 3, 256, 512, 1024], act='LeakyReLU'))
+        # self.sa3_module = GlobalSAModule(MLP([128 + 3, 256, 512, 1024], act='LeakyReLU'))
 
-        self.mlp = MLP([2048, 256, 256, 1], act='LeakyReLU')
+        # self.mlp = MLP([2048, 256, 256, 1], act='LeakyReLU')
+        self.mlp = MLP([1024, 256, 256, 1], act='LeakyReLU')
 
     def forward(self, data):
         sa0_out = (data.x, data.pos, data.batch)
         sa1_out = self.sa1_module(*sa0_out)
         sa2_out = self.sa2_module(*sa1_out)
-        sa3_out = self.sa3_module(*sa2_out)
-        x, _, _ = self.sa4_module(*sa3_out)
+        #sa3_out = self.sa3_module(*sa2_out)
+        x, _, _ = self.sa3_module(*sa2_out)
 
         return self.mlp(x)
