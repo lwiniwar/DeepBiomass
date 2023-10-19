@@ -24,10 +24,55 @@ from pn2_scalar_regressor import Net
 import rasterizer
 from HDF5Loader import HDF5BiomassPointCloud
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+def train(model, optimizer, scheduler, train_loader, device, path):
+    model.train()
+    loss_list = []
+    for i, data in enumerate(tqdm.tqdm(train_loader, desc="Training")):
+        if data.y.shape[-1] != train_loader.batch_size:
+            print("Skipping last batch (not a full batch")
+            continue
+        data = data.to(device)
+        optimizer.zero_grad()
+        out = model(data)[:, 0]
+        loss = F.mse_loss(out, data.y)
+        loss.backward()
+        optimizer.step()
+        if (i + 1) % 1 == 0:
+            l = loss.detach().to("cpu").numpy()
+            # print(f'[{i + 1}/{len(train_loader)}] RMSE Loss: {np.sqrt(l):.4f} ')
+            loss_list.append(l)
+        if (i + 1) % 1000 == 0:
+            print(f'mean RMSE loss last 1000 it: {np.mean(np.sqrt(loss_list[-1000:]))}')
+
+    scheduler.step()
+    print(f'mean RMSE loss this epoch: {np.sqrt(np.mean(loss_list))}')
+    print(f'mean RMSE loss last 1000 it: {np.sqrt(np.mean(loss_list[-1000:]))}')
+
+    return np.mean(loss_list)
+
+
+@torch.no_grad()
+def test(model, loader):
+    model.eval()
+    losses = []
+    for idx, data in enumerate(tqdm.tqdm(loader, desc="Testing")):
+        data = data.to(device)
+        outs = model(data)[:, 0]
+        loss = F.mse_loss(outs, data.y)
+
+        if (idx + 1) % 1000 == 0:
+            print("Sample differences in biomass:")
+            print(data.y.to('cpu').numpy(), ' - ', outs.to('cpu').numpy(), ' = ',
+                  data.y.to('cpu').numpy() - outs.to('cpu').numpy())
+        losses.append(float(loss.to("cpu")))
+    return float(np.mean(losses))
+
 
 def main(args):
     lr = float(args[0])
-    dc = float(args[1])
+    min_lr = float(args[1])
     n_points = int(args[2])
     bs = int(args[3])
     
@@ -47,74 +92,30 @@ def main(args):
     test_loader = DataLoader(test_dataset, batch_size=bs, shuffle=False,
                               num_workers=16)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using {device} device.")
     model = Net(num_features=0).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr) #, weight_decay=dc)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=dc, last_epoch=-1, verbose=True)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=min_lr, last_epoch=-1, verbose=True)
+    model_path = os.path.expandvars(
+        rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr{lr}_minLR{min_lr}_bs{bs}_{n_points}points_3PN_noload.model')
 
-
-    def train(model, path):
-        model.train()
-        loss_list = []
-        for i, data in enumerate(tqdm.tqdm(train_loader, desc="Training")):
-            if data.y.shape[-1] != train_loader.batch_size:
-                print("Skipping last batch (not a full batch")
-                continue
-            data = data.to(device)
-            optimizer.zero_grad()
-            out = model(data)[:, 0]
-            loss = F.mse_loss(out, data.y)
-            loss.backward()
-            optimizer.step()
-            if (i + 1) % 1 == 0:
-                l = loss.detach().to("cpu").numpy()
-                # print(f'[{i + 1}/{len(train_loader)}] RMSE Loss: {np.sqrt(l):.4f} ')
-                loss_list.append(l)
-            if (i + 1) % 1000 == 0:
-                print(f'mean RMSE loss last 1000 it: {np.mean(np.sqrt(loss_list[-1000:]))}')
-
-        scheduler.step()
-        print(f'mean RMSE loss this epoch: {np.sqrt(np.mean(loss_list))}')
-
-        print(f'Saving file...')
-        torch.save(model, path)
-        print(f'mean RMSE loss last 1000 it: {np.sqrt(np.mean(loss_list[-1000:]))}')
-
-        return np.mean(loss_list)
-
-    @torch.no_grad()
-    def test(model, loader, ep_id):
-        model.eval()
-        losses = []
-        for idx, data in enumerate(tqdm.tqdm(loader, desc="Testing")):
-            data = data.to(device)
-            outs = model(data)[:, 0]
-            loss = F.mse_loss(outs, data.y)
-
-            if (idx + 1) % 1000 == 0:
-                print("Sample differences in biomass:")
-                print(data.y.to('cpu').numpy(), ' - ', outs.to('cpu').numpy(), ' = ', data.y.to('cpu').numpy() -  outs.to('cpu').numpy())
-            losses.append(float(loss.to("cpu")))
-        return float(np.mean(losses))
-
+    if os.path.exists(model_path):
+        model = torch.load(model_path)
+        print('loading existing model')
 
     for epoch in range(1, 1001):
-        model_path = os.path.expandvars(rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr{lr}_dc{dc}_bs{bs}_{n_points}points_2PN_noload.model')
-        #if os.path.exists(model_path):
-        #    model = torch.load(model_path)
-        train_mse = train(model, model_path)
+        train_mse = train(model, optimizer, scheduler, train_loader, device, model_path)
         torch.save(model, model_path)
+        test_mse = test(model, test_loader)
 
-        mse = test(model, test_loader, epoch)
         with open(model_path.replace('.model', '.csv'), 'a') as f:
             f.write(
-            f'{epoch}, {train_mse}, {mse}, {optimizer.param_groups[0]["lr"]}\n'
+            f'{epoch}, {train_mse}, {test_mse}, {optimizer.param_groups[0]["lr"]}\n'
             )
-        print(f'Epoch: {epoch:02d}, Mean test MSE: {mse:.4f}')
+        print(f'Epoch: {epoch:02d}, Mean test MSE: {test_mse:.4f}')
         print(f'Epoch: {epoch:02d}, Mean train MSE: {train_mse:.4f}')
 
 
 if __name__ == '__main__':
-    print('lr decay num_points batch_size')
+    print('lr min_lr num_points batch_size')
     main(sys.argv[1:])
