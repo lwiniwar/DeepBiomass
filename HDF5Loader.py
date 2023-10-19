@@ -21,7 +21,7 @@ import rasterizer
 class HDF5BiomassPointCloud(InMemoryDataset):
     """Point cloud dataset."""
 
-    def __init__(self, lasfiles, biomassfile, max_points=20000, backup_extract=None, skip_n=0):
+    def __init__(self, lasfiles, biomassfile, max_points=20000, backup_extract=None, skip_n=0, red_point=None):
         self.lasfiles_ep1 = lasfiles
         self.biomassfile = biomassfile
         self.max_points = max_points
@@ -61,6 +61,8 @@ class HDF5BiomassPointCloud(InMemoryDataset):
                 xy = xyz[:, :2]
                 minxy = np.min(xy, axis=0)
                 maxxy = np.max(xy, axis=0)
+                if red_point is None:
+                    red_point = np.array([minxy[0], minxy[0], 0])
                 if maxxy[0] < ulx or minxy[0] > lrx:
                     continue
                 if maxxy[1] < lry or minxy[1] > uly:
@@ -81,13 +83,14 @@ class HDF5BiomassPointCloud(InMemoryDataset):
                             g = f.create_group(key_name)
                         else:
                             g = f[key_name]
-                        dset = g.create_dataset(f"{fileid}", (len(contains),3), float)
-                        dset[...] = xyz[contains]
-            dset = f.create_dataset("valid_loc", valid_loc.shape, valid_loc.dtype)
+                        dset = g.create_dataset(f"{fileid}", (len(contains),3), float, compression="lzf")
+                        dset[...] = xyz[contains] - red_point
+            dset = f.create_dataset("valid_loc", valid_loc.shape, valid_loc.dtype, compression="lzf")
             dset[...] = valid_loc
             f.close()
 
         self.valid_1d_indices = np.where(valid_loc.flatten())[0]
+        self.red_point = red_point
         print(f"{len(self)} training samples found.")
         super().__init__()
 
@@ -109,6 +112,12 @@ class HDF5BiomassPointCloud(InMemoryDataset):
                 points.append(g[key][...])
 
         xyz = np.concatenate(points, axis=0)
+
+        xyz = xyz[np.random.choice(range(xyz.shape[0]), self.max_points,
+                                   replace=xyz.shape[0] < self.max_points), :]
+
+        xyz -= np.mean(xyz, axis=0)
+        # print(xyz.shape[0])
         # for fileid, contains in lasindices.items():
         #     lashandle = laspy.read(self.lasfiles[fileid])
         #     xyz.append(lashandle.xyz[contains])
@@ -119,22 +128,28 @@ class HDF5BiomassPointCloud(InMemoryDataset):
         return sample
 
 if __name__ == '__main__':
-    test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif",
-                                             backup_extract=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\test_presel.hdf5"
+    train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
+                                             backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"),
+                                             max_points=2048
                                )
-    test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False,
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=False,
                               num_workers=6)
 
-    train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif",
-                                             backup_extract=r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"
+    test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_val.tif"),
+                                             backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel.hdf5"),
+                                             max_points=8096
                                )
-    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=False,
+    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False,
                               num_workers=6)
+
+    sum = 0
+    count = 0
+    for data in tqdm.tqdm(test_loader, "Test loading..."):
+        sum += data.pos.shape[0]
+        count += data.y.shape[-1]
+    print(sum/count)
 
     for data in tqdm.tqdm(train_loader, "Train loading..."):
-        pass
-
-    for data in tqdm.tqdm(test_loader, "Test loading..."):
         pass

@@ -76,6 +76,22 @@ def main(args):
     n_points = int(args[2])
     bs = int(args[3])
     
+    # train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+    #                            biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
+    #                                          backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"),
+    #                                          max_points=n_points
+    #                            )
+    # train_loader = DataLoader(train_dataset, batch_size=bs, shuffle=False,
+    #                           num_workers=16)
+    #
+    # test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+    #                            biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_val.tif"),
+    #                                          backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel.hdf5"),
+    #                                          max_points=n_points
+    #                            )
+    # test_loader = DataLoader(test_dataset, batch_size=bs, shuffle=False,
+    #                           num_workers=16)
+
     train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
                                biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/RF_PRF_biomass_Ton_DRY_masked_train.tif"),
                                              backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/train_presel.hdf5"),
@@ -96,8 +112,10 @@ def main(args):
     model = Net(num_features=0).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr) #, weight_decay=dc)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=min_lr, last_epoch=-1, verbose=True)
+    # model_path = os.path.expandvars(
+    #     rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr{lr}_minLR{min_lr}_bs{bs}_{n_points}points_3PN_noload.model')
     model_path = os.path.expandvars(
-        rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr{lr}_minLR{min_lr}_bs{bs}_{n_points}points_3PN_noload.model')
+        rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr{lr}_minLR{min_lr}_bs{bs}_{n_points}pts_normXYZ.model')
 
     if os.path.exists(model_path):
         model = torch.load(model_path)
