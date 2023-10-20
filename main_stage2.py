@@ -1,4 +1,6 @@
 import sys, os
+
+import numpy as np
 import tqdm
 
 from pathlib import Path
@@ -78,6 +80,8 @@ def test(biomass_model, predict_model, dataloader):
         biomass_t2_from_t1 = biomass_model.mlp(features_t2_from_t1)
         diff_biomass = biomass_t2 - biomass_t2_from_t1
         loss_list.append(diff_biomass)
+    print(f"Mean biomass diff/loss: {np.mean(loss_list)}")
+    return np.mean(loss_list)
 
 def main(args):
     lr = float(args[0] if len(args)>0 else 1e-5)
@@ -95,7 +99,7 @@ def main(args):
         biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
         backup_extract_ep1=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"),
         backup_extract_ep2=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel_2018.hdf5"),
-        max_points=2048)
+        max_points=8096)
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True,
                               num_workers=6)
@@ -110,7 +114,7 @@ def main(args):
             r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_val.tif"),
         backup_extract_ep1=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel.hdf5"),
         backup_extract_ep2=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel_2018.hdf5"),
-        max_points=2048)
+        max_points=8096)
 
     test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False,
                               num_workers=6)
@@ -121,10 +125,23 @@ def main(args):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=min_lr, last_epoch=-1,
                                                            verbose=True)
 
+    model_path = os.path.expandvars(
+        rf'D:\lwiniwar\data\uncertaintree\DeepBiomass\models\JustMLP.model')
+
+
     for ep in range(50):
-        train(trained_biomass_model, predict_model, optimizer, train_loader)
+        train_mse = train(trained_biomass_model, predict_model, optimizer, train_loader)
+        test_me = test(trained_biomass_model, predict_model, test_loader)
+        torch.save(predict_model, model_path)
+
+        with open(model_path.replace('.model', '.csv'), 'a') as f:
+            f.write(
+                f'{ep}, {train_mse}, {test_me}, {optimizer.param_groups[0]["lr"]}\n'
+            )
+        print(f'Epoch: {ep:02d}, Mean test ME (biomass): {test_me:.4f}')
+        print(f'Epoch: {ep:02d}, Mean train MSE (feat vec.): {train_mse:.4f}')
+
         scheduler.step()
-        test(trained_biomass_model, predict_model, test_loader)
 
 
 
