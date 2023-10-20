@@ -47,11 +47,13 @@ class Net(torch.nn.Module):
         # self.mlp = MLP([2048, 256, 256, 1], act='LeakyReLU')
         self.mlp = MLP([1024, 256, 256, 1], act='LeakyReLU')
 
-    def forward(self, data):
+    def forward(self, data, return_feature_vec=False):
         sa0_out = (data.x, data.pos, data.batch)
         sa1_out = self.sa1_module(*sa0_out)
         sa2_out = self.sa2_module(*sa1_out)
         #sa3_out = self.sa3_module(*sa2_out)
         x, _, _ = self.sa3_module(*sa2_out)
-
-        return self.mlp(x)
+        if return_feature_vec:
+            return self.mlp(x), x
+        else:
+            return self.mlp(x)

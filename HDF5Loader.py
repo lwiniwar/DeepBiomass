@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import os
 
+from collections import namedtuple
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -97,12 +99,9 @@ class HDF5BiomassPointCloud(InMemoryDataset):
     def __len__(self):
         return len(self.valid_1d_indices) - self.skip_n
 
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-        idx += self.skip_n
+    def get_item_raw_idx(self, idx):
 
-        xpos, ypos = np.unravel_index(self.valid_1d_indices[idx], (self.YSize, self.XSize))
+        xpos, ypos = np.unravel_index(idx, (self.YSize, self.XSize))
         y_label = self.biomass[xpos, ypos]
 
         with h5py.File(self.backup_extract, 'r') as f:
@@ -127,6 +126,41 @@ class HDF5BiomassPointCloud(InMemoryDataset):
 
         return sample
 
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        idx += self.skip_n
+
+        valid_idx = self.valid_1d_indices[idx]
+
+        return self.get_item_raw_idx(valid_idx)
+
+
+dualData = namedtuple('dualData', ['t1', 't2'])
+class TwoHDF5BiomassPointCloud(InMemoryDataset):
+    """Point cloud dataset with 2 epochs."""
+    def __init__(self, lasfiles_ep1, lasfiles_ep2, biomassfile, max_points=20000, backup_extract_ep1=None,
+                 backup_extract_ep2=None, red_point=None):
+        self.HDF1 = HDF5BiomassPointCloud(lasfiles_ep1,  biomassfile, max_points, backup_extract_ep1, 0, red_point)
+        self.HDF2 = HDF5BiomassPointCloud(lasfiles_ep2,  biomassfile, max_points, backup_extract_ep2, 0, red_point)
+        self.valid_1d_indices = np.where(np.bincount(np.concatenate([self.HDF1.valid_1d_indices, self.HDF2.valid_1d_indices])) == 2)[0]
+        super().__init__()
+
+    def __len__(self):
+        return len(self.valid_1d_indices)
+
+    def __getitem__(self, idx):
+
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        val_idx = self.valid_1d_indices[idx]
+        d1 = self.HDF1.get_item_raw_idx(val_idx)
+        d2 = self.HDF2.get_item_raw_idx(val_idx)
+
+        return dualData(d1, d2)
+
+
 if __name__ == '__main__':
     train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
                                biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
@@ -137,8 +171,8 @@ if __name__ == '__main__':
                               num_workers=6)
 
     test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_val.tif"),
-                                             backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel.hdf5"),
+                               biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif"),
+                                             backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\test_presel.hdf5"),
                                              max_points=8096
                                )
     test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False,
