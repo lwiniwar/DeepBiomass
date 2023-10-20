@@ -40,7 +40,7 @@ class JustMLP(torch.nn.Module):
         super().__init__()
         self.mlp = MLP([1024, 2048, 2048, 2048, 1024], act='LeakyReLU')
     def forward(self, data):
-        return self.mlp(data.x)
+        return self.mlp(data)
 
 def train(biomass_model, predict_model, optimizer, dataloader):
     predict_model.train()
@@ -49,13 +49,13 @@ def train(biomass_model, predict_model, optimizer, dataloader):
         if len(data.t1) != dataloader.batch_size:
             print("Skipping last batch (not a full batch")
             continue
-        data.t1 = data.t1.to(device)
-        data.t2 = data.t2.to(device)
+        data_t1 = data.t1.to(device)
+        data_t2 = data.t2.to(device)
         optimizer.zero_grad()
 
         # get the feature vector for both epochs from the previously trained NN
-        biomass_t1, features_t1 = biomass_model(data.t1, return_feature_vec=True)
-        biomass_t2, features_t2 = biomass_model(data.t2, return_feature_vec=True)  # note that this biomass is not valid
+        biomass_t1, features_t1 = biomass_model(data_t1, return_feature_vec=True)
+        biomass_t2, features_t2 = biomass_model(data_t2, return_feature_vec=True)  # note that this biomass is not valid
 
         features_t2_from_t1 = predict_model(features_t1)
         loss = F.mse_loss(features_t2, features_t2_from_t1)  # minimize difference in feature vector space (1024-dim)
