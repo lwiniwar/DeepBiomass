@@ -64,24 +64,31 @@ def train(biomass_model, predict_model, optimizer, dataloader):
 
         loss.backward()
         optimizer.step()
+        
+        loss_list.append(loss.to('cpu').detach().numpy().flatten())
+    
+    mean_delta_biom = np.mean(np.concatenate(loss_list))
+    return mean_delta_biom
+    
 
 def test(biomass_model, predict_model, dataloader):
     predict_model.eval()
     loss_list = []
     for i, data in enumerate(tqdm.tqdm(dataloader, desc="Testing")):
-        if data.y.shape[-1] != dataloader.batch_size:
-            print("Skipping last batch (not a full batch")
-            continue
-        data = data.to(device)
-        biomass_t1, features_t1 = biomass_model(data.t1, return_feature_vec=True)
-        biomass_t2, features_t2 = biomass_model(data.t2, return_feature_vec=True)
+
+        data_t1 = data.t1.to(device)
+        data_t2 = data.t2.to(device)
+        biomass_t1, features_t1 = biomass_model(data_t1, return_feature_vec=True)
+        biomass_t2, features_t2 = biomass_model(data_t2, return_feature_vec=True)
 
         features_t2_from_t1 = predict_model(features_t1)
         biomass_t2_from_t1 = biomass_model.mlp(features_t2_from_t1)
-        diff_biomass = biomass_t2 - biomass_t2_from_t1
+        diff_biomass = (biomass_t2 - biomass_t2_from_t1).to('cpu').detach().numpy()
         loss_list.append(diff_biomass)
-    print(f"Mean biomass diff/loss: {np.mean(loss_list)}")
-    return np.mean(loss_list)
+    mean_delta_biom = np.mean(np.abs(np.concatenate(loss_list)))
+    rms_delta_biom = np.sqrt(np.mean(np.square(np.concatenate(loss_list))))
+    # print(f"Mean biomass diff/loss: {mean_delta_biom}")
+    return mean_delta_biom, rms_delta_biom
 
 def main(args):
     lr = float(args[0] if len(args)>0 else 1e-5)
@@ -89,56 +96,60 @@ def main(args):
 
     trained_biomass_model = PNet2(0)
 
-    trained_biomass_model_w = torch.load(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\models\deepbiomass_lr3e-06_minLR1e-08_bs8_8192pts_normXYZ.model", map_location=device)
+    trained_biomass_model_w = torch.load(
+    os.path.expandvars(
+        rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr3e-06_minLR1e-08_bs8_8192pts_normXYZ.model')
+    , map_location='cpu')
     trained_biomass_model.load_state_dict(trained_biomass_model_w.state_dict())
 
 
     train_dataset = TwoHDF5BiomassPointCloud(
-        lasfiles_ep1=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-        lasfiles_ep2=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2018_SPL_CGVD28\3_tiled_norm").glob("*.laz")),
-        biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
-        backup_extract_ep1=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"),
-        backup_extract_ep2=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel_2018.hdf5"),
-        max_points=8096)
+        lasfiles_ep1=list(Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
+        lasfiles_ep2=list(Path(r"/tmp/lwiniwar/2018_norm").glob("*.laz")),
+        biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/RF_PRF_biomass_Ton_DRY_masked_train.tif"),
+        backup_extract_ep1=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/train_presel.hdf5"),
+        backup_extract_ep2=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/train_presel_2018.hdf5"),
+        max_points=8192)
 
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True,
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True,
                               num_workers=6)
 
     test_dataset = TwoHDF5BiomassPointCloud(
         lasfiles_ep1=list(
-            Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+            Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
         lasfiles_ep2=list(
-            Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2018_SPL_CGVD28\3_tiled_norm").glob(
+            Path(r"/tmp/lwiniwar/2018_norm").glob(
                 "*.laz")),
-        biomassfile=os.path.expandvars(
-            r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_val.tif"),
-        backup_extract_ep1=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel.hdf5"),
-        backup_extract_ep2=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\val_presel_2018.hdf5"),
-        max_points=8096)
+        biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/RF_PRF_biomass_Ton_DRY_masked_val.tif"),
+        backup_extract_ep1=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/val_presel.hdf5"),
+        backup_extract_ep2=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/val_presel_2018.hdf5"),
+        max_points=8192)
 
-    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False,
+    test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False,
                               num_workers=6)
 
 
-    predict_model = JustMLP()
+    predict_model = JustMLP().to(device)
     optimizer = torch.optim.Adam(predict_model.parameters(), lr=lr)  # , weight_decay=dc)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=min_lr, last_epoch=-1,
                                                            verbose=True)
 
     model_path = os.path.expandvars(
-        rf'D:\lwiniwar\data\uncertaintree\DeepBiomass\models\JustMLP.model')
+        rf'$DATA/PetawawaHarmonized/models/justMLP_lr{lr}_minLR_{min_lr}.model')
 
-
+    trained_biomass_model = trained_biomass_model.to(device)
+    
     for ep in range(50):
         train_mse = train(trained_biomass_model, predict_model, optimizer, train_loader)
-        test_me = test(trained_biomass_model, predict_model, test_loader)
+        test_mad, test_rmsd = test(trained_biomass_model, predict_model, test_loader)
         torch.save(predict_model, model_path)
 
         with open(model_path.replace('.model', '.csv'), 'a') as f:
             f.write(
-                f'{ep}, {train_mse}, {test_me}, {optimizer.param_groups[0]["lr"]}\n'
+                f'{ep}, {train_mse}, {test_mad}, {test_rmsd}, {optimizer.param_groups[0]["lr"]}\n'
             )
-        print(f'Epoch: {ep:02d}, Mean test ME (biomass): {test_me:.4f}')
+        print(f'Epoch: {ep:02d}, Test MAD (biomass): {test_mad:.4f}')
+        print(f'Epoch: {ep:02d}, Test RMSD (biomass): {test_rmsd:.4f}')
         print(f'Epoch: {ep:02d}, Mean train MSE (feat vec.): {train_mse:.4f}')
 
         scheduler.step()
