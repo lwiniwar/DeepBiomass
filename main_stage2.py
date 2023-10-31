@@ -64,12 +64,12 @@ def train(biomass_model, predict_model, optimizer, dataloader):
 
         loss.backward()
         optimizer.step()
-        
+
         loss_list.append(loss.to('cpu').detach().numpy().flatten())
-    
+
     mean_delta_biom = np.mean(np.concatenate(loss_list))
     return mean_delta_biom
-    
+
 
 def test(biomass_model, predict_model, dataloader):
     predict_model.eval()
@@ -85,6 +85,11 @@ def test(biomass_model, predict_model, dataloader):
         biomass_t2_from_t1 = biomass_model.mlp(features_t2_from_t1)
         diff_biomass = (biomass_t2 - biomass_t2_from_t1).to('cpu').detach().numpy()
         loss_list.append(diff_biomass)
+        if (i+1) % 1000 == 0:
+            print("Biomass t2:\n",
+                  "\t from PN++(t2):", biomass_t2,
+                  "\t from MLP(PN++(t1):", biomass_t2_from_t1,
+                  "\t from RF (truth):", data_t2.y.to('cpu'))
     mean_delta_biom = np.mean(np.abs(np.concatenate(loss_list)))
     rms_delta_biom = np.sqrt(np.mean(np.square(np.concatenate(loss_list))))
     # print(f"Mean biomass diff/loss: {mean_delta_biom}")
@@ -98,7 +103,7 @@ def main(args):
 
     trained_biomass_model_w = torch.load(
     os.path.expandvars(
-        rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr3e-06_minLR1e-08_bs8_8192pts_normXYZ.model')
+        rf'$DATA/PetawawaHarmonized/models/deepbiomass_lr0.0001_minLR1e-08_bs8_8192pts_normXYZ_2012+18.model')
     , map_location='cpu')
     trained_biomass_model.load_state_dict(trained_biomass_model_w.state_dict())
 
@@ -106,9 +111,10 @@ def main(args):
     train_dataset = TwoHDF5BiomassPointCloud(
         lasfiles_ep1=list(Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
         lasfiles_ep2=list(Path(r"/tmp/lwiniwar/2018_norm").glob("*.laz")),
-        biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/RF_PRF_biomass_Ton_DRY_masked_train.tif"),
-        backup_extract_ep1=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/train_presel.hdf5"),
-        backup_extract_ep2=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/train_presel_2018.hdf5"),
+        biomassfile_ep1=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2012_train.tif"),
+        biomassfile_ep2=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2018_train.tif"),
+        backup_extract_ep1=os.path.expandvars(r"/tmp/lwiniwar/train_presel_2012.hdf5"),
+        backup_extract_ep2=os.path.expandvars(r"/tmp/lwiniwar/train_presel_2018.hdf5"),
         max_points=8192)
 
     train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True,
@@ -120,9 +126,10 @@ def main(args):
         lasfiles_ep2=list(
             Path(r"/tmp/lwiniwar/2018_norm").glob(
                 "*.laz")),
-        biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/RF_PRF_biomass_Ton_DRY_masked_val.tif"),
-        backup_extract_ep1=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/val_presel.hdf5"),
-        backup_extract_ep2=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/val_presel_2018.hdf5"),
+        biomassfile_ep1=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2012_val.tif"),
+        biomassfile_ep2=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2018_val.tif"),
+        backup_extract_ep1=os.path.expandvars(r"/tmp/lwiniwar/val_presel_2012.hdf5"),
+        backup_extract_ep2=os.path.expandvars(r"/tmp/lwiniwar/val_presel_2018.hdf5"),
         max_points=8192)
 
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False,
@@ -138,7 +145,7 @@ def main(args):
         rf'$DATA/PetawawaHarmonized/models/justMLP_lr{lr}_minLR_{min_lr}.model')
 
     trained_biomass_model = trained_biomass_model.to(device)
-    
+
     for ep in range(50):
         train_mse = train(trained_biomass_model, predict_model, optimizer, train_loader)
         test_mad, test_rmsd = test(trained_biomass_model, predict_model, test_loader)

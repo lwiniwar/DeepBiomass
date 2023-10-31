@@ -8,7 +8,7 @@ sbatch <<EOT
 #SBATCH --qos=zen2_0256_a40x2
 ##SBATCH --partition=zen3_0512_a100x2
 ##SBATCH --qos=zen3_0512_a100x2
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --mem=128G
 #SBATCH --ntasks-per-node=1
 #SBATCH --ntasks-per-core=1
@@ -39,7 +39,8 @@ mkdir /tmp/lwiniwar/2018_norm
 cp $DATA/PetawawaHarmonized/*.hdf5 /tmp/lwiniwar/
 echo "Waiting for files to finish copying..."
 sleep 10
-python main.py $1 $2 $3 $4
+python main_stage2.py $1 $2 
+#$3 $4
 # echo "Cleaning up local HDD..."
 # rm -R /tmp/lwiniwar
 exit 0

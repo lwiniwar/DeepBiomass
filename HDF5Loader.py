@@ -1,3 +1,4 @@
+import shutil
 import sys
 from pathlib import Path
 import re
@@ -139,10 +140,10 @@ class HDF5BiomassPointCloud(InMemoryDataset):
 dualData = namedtuple('dualData', ['t1', 't2'])
 class TwoHDF5BiomassPointCloud(InMemoryDataset):
     """Point cloud dataset with 2 epochs."""
-    def __init__(self, lasfiles_ep1, lasfiles_ep2, biomassfile, max_points=20000, backup_extract_ep1=None,
+    def __init__(self, lasfiles_ep1, lasfiles_ep2, biomassfile_ep1, biomassfile_ep2, max_points=20000, backup_extract_ep1=None,
                  backup_extract_ep2=None, red_point=None):
-        self.HDF1 = HDF5BiomassPointCloud(lasfiles_ep1,  biomassfile, max_points, backup_extract_ep1, 0, red_point)
-        self.HDF2 = HDF5BiomassPointCloud(lasfiles_ep2,  biomassfile, max_points, backup_extract_ep2, 0, red_point)
+        self.HDF1 = HDF5BiomassPointCloud(lasfiles_ep1,  biomassfile_ep1, max_points, backup_extract_ep1, 0, red_point)
+        self.HDF2 = HDF5BiomassPointCloud(lasfiles_ep2,  biomassfile_ep2, max_points, backup_extract_ep2, 0, red_point)
         self.valid_1d_indices = np.where(np.bincount(np.concatenate([self.HDF1.valid_1d_indices, self.HDF2.valid_1d_indices])) == 2)[0]
         super().__init__()
 
@@ -162,28 +163,89 @@ class TwoHDF5BiomassPointCloud(InMemoryDataset):
 
 
 if __name__ == '__main__':
-    train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
-                                             backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"),
-                                             max_points=2048
+    # train_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+    #                            biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_train.tif"),
+    #                                          backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\train_presel.hdf5"),
+    #                                          max_points=2048
+    #                            )
+    # train_loader = DataLoader(train_dataset, batch_size=4, shuffle=False,
+    #                           num_workers=6)
+    #
+    # test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
+    #                            biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif"),
+    #                                          backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\test_presel.hdf5"),
+    #                                          max_points=8096
+    #                            )
+    # test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False,
+    #                           num_workers=6)
+    #
+    # sum = 0
+    # count = 0
+    # for data in tqdm.tqdm(test_loader, "Test loading..."):
+    #     sum += data.pos.shape[0]
+    #     count += data.y.shape[-1]
+    # print(sum/count)
+    #
+    # for data in tqdm.tqdm(train_loader, "Train loading..."):
+    #     pass
+    n_points = 8192
+    bs=16
+    from torch.utils.data import ConcatDataset
+
+    train_dataset_2012 = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2012_train.tif"),
+                                             backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/train_presel.hdf5"),
+                                             max_points=n_points
                                )
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=False,
-                              num_workers=6)
-
-    test_dataset = HDF5BiomassPointCloud(lasfiles=list(Path(r"D:\lwiniwar\data\uncertaintree\PetawawaHarmonized\Harmonized\2012_ALS\3_tiled_norm").glob("*.laz")),
-                               biomassfile=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\RF_PRF_biomass_Ton_DRY_masked_test.tif"),
-                                             backup_extract=os.path.expandvars(r"D:\lwiniwar\data\uncertaintree\DeepBiomass\test_presel.hdf5"),
-                                             max_points=8096
+    train_dataset_2018 = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2018_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2018_train.tif"),
+                                 backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/train_presel.hdf5"),
+                                 max_points=n_points
                                )
-    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False,
-                              num_workers=6)
 
-    sum = 0
-    count = 0
-    for data in tqdm.tqdm(test_loader, "Test loading..."):
-        sum += data.pos.shape[0]
-        count += data.y.shape[-1]
-    print(sum/count)
+    train_dataset = ConcatDataset([train_dataset_2012, train_dataset_2018])
 
-    for data in tqdm.tqdm(train_loader, "Train loading..."):
-        pass
+    train_loader = DataLoader(train_dataset, batch_size=bs, shuffle=True,
+                              num_workers=16)
+
+
+
+    val_dataset_2012 = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2012_val.tif"),
+                                             backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/val_presel.hdf5"),
+                                             max_points=n_points
+                               )
+
+    val_dataset_2018 = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2018_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2018_val.tif"),
+                                             backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/val_presel.hdf5"),
+                                             max_points=n_points
+                               )
+
+    val_dataset = ConcatDataset([val_dataset_2012, val_dataset_2018])
+    val_loader = DataLoader(val_dataset, batch_size=bs, shuffle=False,
+                              num_workers=16)
+
+    test_dataset_2012 = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2012_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2012_test.tif"),
+                                             backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2012_norm/test_presel.hdf5"),
+                                             max_points=n_points
+                               )
+
+    test_dataset_2018 = HDF5BiomassPointCloud(lasfiles=list(Path(r"/tmp/lwiniwar/2018_norm").glob("*.laz")),
+                               biomassfile=os.path.expandvars(r"$DATA/PetawawaHarmonized/biom_2018_test.tif"),
+                                             backup_extract=os.path.expandvars(r"/tmp/lwiniwar/2018_norm/test_presel.hdf5"),
+                                             max_points=n_points
+                               )
+
+    test_dataset = ConcatDataset([test_dataset_2012, test_dataset_2018])
+    test_loader = DataLoader(test_dataset, batch_size=bs, shuffle=False,
+                              num_workers=16)
+
+    shutil.copy2(train_dataset_2012.backup_extract, r'/gpfs/data/fs70533/lwiniwar/PetawawaHarmonized/train_presel_2012.hdf5')
+    shutil.copy2(val_dataset_2012.backup_extract, r'/gpfs/data/fs70533/lwiniwar/PetawawaHarmonized/val_presel_2012.hdf5')
+    shutil.copy2(test_dataset_2012.backup_extract, r'/gpfs/data/fs70533/lwiniwar/PetawawaHarmonized/test_presel_2012.hdf5')
+    shutil.copy2(train_dataset_2018.backup_extract, r'/gpfs/data/fs70533/lwiniwar/PetawawaHarmonized/train_presel_2018.hdf5')
+    shutil.copy2(val_dataset_2018.backup_extract, r'/gpfs/data/fs70533/lwiniwar/PetawawaHarmonized/val_presel_2018.hdf5')
+    shutil.copy2(test_dataset_2018.backup_extract, r'/gpfs/data/fs70533/lwiniwar/PetawawaHarmonized/test_presel_2018.hdf5')
+    print("Copied files")
